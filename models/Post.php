@@ -506,26 +506,29 @@ class Post extends Model
     {
         $result = null;
 
+        if (!$item->cmsPage)
+            return;
+
+        $page = CmsPage::loadCached($theme, $item->cmsPage);
+        if (!$page)
+            return;
+
+        $paramName = self::getPostParamName($page);
+        if (!$paramName)
+            return;
+
         if ($item->type == 'blog-post') {
-            if (!$item->reference || !$item->cmsPage)
+            if (!$item->reference)
                 return;
 
-            $category = self::find($item->reference);
-            if (!$category)
+            $post = self::find($item->reference);
+            if (!$post)
                 return;
 
-            $pageUrl = self::getPostPageUrl($item->cmsPage, $category, $theme);
-            if (!$pageUrl)
-                return;
-
-            $pageUrl = Url::to($pageUrl);
-
-            $result = [];
-            $result['url'] = $pageUrl;
-            $result['isActive'] = $pageUrl == $url;
-            $result['mtime'] = $category->updated_at;
+            $result = self::getPostMenuItem($page, $post, $paramName, $url);
         }
         elseif ($item->type == 'all-blog-posts') {
+
             $result = [
                 'items' => []
             ];
@@ -535,33 +538,14 @@ class Post extends Model
             ->get();
 
             foreach ($posts as $post) {
-                $postItem = [
-                    'title' => $post->title,
-                    'url'   => self::getPostPageUrl($item->cmsPage, $post, $theme),
-                    'mtime' => $post->updated_at,
-                ];
-
-                $postItem['isActive'] = $postItem['url'] == $url;
-
-                $result['items'][] = $postItem;
+                $result['items'][] = self::getPostMenuItem($page, $post, $paramName, $url);
             }
         }
 
         return $result;
     }
 
-    /**
-     * Returns URL of a post page.
-     *
-     * @param $pageCode
-     * @param $category
-     * @param $theme
-     */
-    protected static function getPostPageUrl($pageCode, $category, $theme)
-    {
-        $page = CmsPage::loadCached($theme, $pageCode);
-        if (!$page) return;
-
+    protected static function getPostParamName($page) {
         $properties = $page->getComponentProperties('blogPost');
         if (!isset($properties['slug'])) {
             return;
@@ -576,8 +560,83 @@ class Post extends Model
         }
 
         $paramName = substr(trim($matches[1]), 1);
-        $url = CmsPage::url($page->getBaseFileName(), [$paramName => $category->slug]);
+
+        return $paramName;
+    }
+
+    /**
+     * Returns URL of a post page.
+     *
+     * @param $page
+     * @param $post
+     * @param $paramName
+     */
+    protected static function getPostPageUrl($page, $post, $paramName)
+    {
+        $url = CmsPage::url($page->getBaseFileName(), [$paramName => $post->slug]);
+
+        if (!$url)
+            return;
+
+        $url = Url::to($url);
 
         return $url;
     }
+
+    /**
+     * Returns the localized URL of a post page.
+     *
+     * @param $page
+     * @param $post
+     * @param $paramName
+     * @param $theme
+     */
+    protected static function getPostPageLocaleUrl($page, $post, $paramName, $locale)
+    {
+        $translator = \RainLab\Translate\Classes\Translator::instance();
+
+        if ($page->hasTranslatablePageUrl($locale)) {
+            $page->rewriteTranslatablePageUrl($locale);
+        }
+
+        $post->lang($locale);
+
+        $url = $translator->getPathInLocale(str_replace(':'.$paramName, $post->slug, $page->url), $locale);
+
+        if (!$url)
+            return;
+
+        $url = Url::to($url);
+
+        return $url;
+    }
+
+    protected static function getPostMenuItem($page, $post, $paramName, $url)
+    {
+        $result = [];
+
+        $pageUrl = self::getPostPageUrl($page, $post, $paramName);
+
+        if (class_exists('\RainLab\Translate\Classes\Translator') &&
+                !\RainLab\Translate\Classes\Translator::instance()->loadLocaleFromRequest()
+            ){
+
+            $defaultLocale = \RainLab\Translate\Models\Locale::getDefault()->code;
+            $alternateLocales = array_keys(array_except(\RainLab\Translate\Models\Locale::listEnabled(), $defaultLocale));
+
+            $pageUrl = self::getPostPageLocaleUrl($page, $post, $paramName, $defaultLocale);
+
+            foreach ($alternateLocales as $locale) {
+                $result['alternate_locale_urls'][$locale] = self::getPostPageLocaleUrl($page, $post, $paramName, $locale);
+            }
+        }
+
+        $result['title'] = $post->title;
+        $result['url'] = $pageUrl;
+        $result['isActive'] = $pageUrl == $url;
+        $result['mtime'] = $post->updated_at;
+
+        return $result;
+    }
+
 }
